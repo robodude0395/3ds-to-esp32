@@ -1,7 +1,7 @@
 BasicInfo:
-  Title                   : "3DS Controller"
+  Title                   : "3DSController"
   CompanyCode             : "00"
-  ProductCode             : "CTR-N-3DCT"
+  ProductCode             : "CTR-H-3DCT"
   ContentType             : Application
   Logo                    : None
 
@@ -28,7 +28,7 @@ AccessControlInfo:
   CanUseNonAlphabetAndNumber    : false
   PermitMainFunctionArgument    : false
   CanShareDeviceMemory          : false
-  RunnableOnSleep               : false
+  RunnableOnSleep               : true
   SpecialMemoryArrange          : false
   ResourceLimitCategory         : Application
   CoreVersion                   : 2
@@ -37,8 +37,6 @@ AccessControlInfo:
   MemoryType                    : Application
   SystemMode                    : 64MB
   HandleTableSize               : 512
-  IORegisterMapping:
-  MemoryMapping:
 
   SystemCallAccess:
     ArbitrateAddress            : 34
@@ -48,7 +46,7 @@ AccessControlInfo:
     CloseHandle                 : 35
     ConnectToPort               : 45
     ControlMemory               : 1
-    CreateAddressArbiter         : 33
+    CreateAddressArbiter        : 33
     CreateEvent                 : 23
     CreateMemoryBlock           : 30
     CreateMutex                 : 19
@@ -88,8 +86,6 @@ AccessControlInfo:
     WaitSynchronization1        : 36
     WaitSynchronizationN        : 37
 
-  InterruptNumbers:
-
   ServiceAccessControl:
     - ac:u
     - soc:U
@@ -99,7 +95,6 @@ AccessControlInfo:
     - fs:USER
     - cfg:u
     - ndm:u
-    - pdn:s
     - ptm:u
 
 SystemControlInfo:
@@ -114,4 +109,3 @@ SystemControlInfo:
     ndm                         : 0x0004013000002B02
     nwm                         : 0x0004013000002D02
     socket                      : 0x0004013000002E02
-    ssl                         : 0x0004013000002F02

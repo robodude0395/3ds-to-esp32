@@ -118,9 +118,9 @@ $(BUILD):
 # CIA target - converts 3dsx to CIA via cxitool
 #---------------------------------------------------------------------------------
 cia: $(BUILD)
+	@bannertool makebanner -i $(TOPDIR)/banner.png -a $(TOPDIR)/silence.wav -o $(CURDIR)/banner.bnr
 	@bannertool makesmdh -s "$(APP_TITLE)" -l "$(APP_DESCRIPTION)" -p "$(APP_AUTHOR)" -i $(APP_ICON) -o $(CURDIR)/icon.icn
-	@cxitool -t 0x000400000FF3DC00 $(OUTPUT).3dsx $(OUTPUT).cxi
-	@makerom -f cia -o $(CURDIR)/$(TARGET).cia -content $(OUTPUT).cxi:0:0x00 -ignoresign
+	@makerom -f cia -o $(CURDIR)/$(TARGET).cia -elf $(OUTPUT).elf -rsf $(TOPDIR)/app.rsf -icon $(CURDIR)/icon.icn -banner $(CURDIR)/banner.bnr -ignoresign
 	@echo "Built: $(TARGET).cia"
 
 #---------------------------------------------------------------------------------
