@@ -10,6 +10,16 @@ TOPDIR ?= $(CURDIR)
 include $(DEVKITARM)/3ds_rules
 
 #---------------------------------------------------------------------------------
+# Metadata
+#---------------------------------------------------------------------------------
+APP_TITLE	:= 3DS Controller
+APP_DESCRIPTION	:= ESP32 wireless controller
+APP_AUTHOR	:= Omar Veiga
+
+# Icon must be a 48x48 PNG
+APP_ICON	:= $(TOPDIR)/icon.png
+
+#---------------------------------------------------------------------------------
 # TARGET is the name of the output
 # BUILD is the directory where object files & intermediate files will be placed
 # SOURCES is a list of directories containing source code
@@ -90,7 +100,12 @@ export INCLUDE	:=	$(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
 
 export LIBPATHS	:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 
-.PHONY: $(BUILD) clean all
+export APP_TITLE
+export APP_DESCRIPTION
+export APP_AUTHOR
+export APP_ICON
+
+.PHONY: $(BUILD) clean all cia
 
 #---------------------------------------------------------------------------------
 all: $(BUILD)
@@ -100,9 +115,17 @@ $(BUILD):
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 
 #---------------------------------------------------------------------------------
+# CIA target - converts 3dsx to CIA via cxitool
+#---------------------------------------------------------------------------------
+cia: $(BUILD)
+	@cxitool $(OUTPUT).3dsx $(OUTPUT).cxi
+	@makerom -f cia -o $(CURDIR)/$(TARGET).cia -target t -i $(OUTPUT).cxi:0:0 -ignoresign
+	@echo "Built: $(TARGET).cia"
+
+#---------------------------------------------------------------------------------
 clean:
 	@echo clean ...
-	@rm -fr $(BUILD) $(TARGET).3dsx $(TARGET).elf
+	@rm -fr $(BUILD) $(TARGET).3dsx $(TARGET).elf $(TARGET).cia $(TARGET).cxi
 
 
 #---------------------------------------------------------------------------------
