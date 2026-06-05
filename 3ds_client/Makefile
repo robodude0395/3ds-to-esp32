@@ -118,10 +118,13 @@ $(BUILD):
 # CIA target - converts 3dsx to CIA via cxitool
 #---------------------------------------------------------------------------------
 cia: $(BUILD)
-	@bannertool makebanner -i $(TOPDIR)/banner.png -a $(TOPDIR)/silence.wav -o $(CURDIR)/banner.bnr
-	@bannertool makesmdh -s "$(APP_TITLE)" -l "$(APP_DESCRIPTION)" -p "$(APP_AUTHOR)" -i $(APP_ICON) -o $(CURDIR)/icon.icn
-	@makerom -f cia -o $(CURDIR)/$(TARGET).cia -elf $(OUTPUT).elf -rsf $(TOPDIR)/app.rsf -icon $(CURDIR)/icon.icn -banner $(CURDIR)/banner.bnr -ignoresign
+	@cxitool $(OUTPUT).3dsx $(OUTPUT).cxi
+	@makerom -f cia -o $(CURDIR)/$(TARGET).cia -target t -i $(OUTPUT).cxi:0:0 -ignoresign
 	@echo "Built: $(TARGET).cia"
+	@echo ""
+	@echo "NOTE: The CIA will show a generic icon on the Home Menu."
+	@echo "The app itself works correctly. For a custom icon, use the .3dsx"
+	@echo "via Homebrew Launcher instead (it shows the proper icon there)."
 
 #---------------------------------------------------------------------------------
 clean:
