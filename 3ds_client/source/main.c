@@ -14,9 +14,6 @@
 #define SERVER_IP   "192.168.4.1"
 #define SERVER_PORT 80
 
-// How often to send updates (ms)
-#define SEND_INTERVAL 50
-
 // Button name mapping
 typedef struct {
     u32 key;
@@ -39,12 +36,16 @@ static const ButtonMap buttons[] = {
 };
 #define NUM_BUTTONS (sizeof(buttons) / sizeof(buttons[0]))
 
-// Send a quick HTTP GET request (fire and forget)
+// ============================================================
+// Networking - single batched request per frame
+// ============================================================
+
+// Send a quick HTTP GET (fire and forget, non-blocking read)
 static int sendHTTPGet(const char* path) {
     struct sockaddr_in server_addr;
     int sock;
-    char request[256];
-    char response[128];
+    char request[512];
+    char response[64];
 
     sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) return -1;
@@ -66,25 +67,26 @@ static int sendHTTPGet(const char* path) {
         path, SERVER_IP);
 
     send(sock, request, strlen(request), 0);
-
-    // Read just enough to complete the request
     recv(sock, response, sizeof(response) - 1, 0);
-
     close(sock);
     return 0;
 }
 
-// Send button state
-static void sendButton(const char* id, int pressed) {
-    char path[64];
-    snprintf(path, sizeof(path), "/b?i=%s&s=%d", id, pressed);
-    sendHTTPGet(path);
-}
+// Send entire input state in one request:
+// GET /i?b=XXXX&x=NN&y=NN
+// where b is a hex bitmask of all held buttons, x/y are stick
+static void sendInputState(u32 held, int stickX, int stickY) {
+    // Encode button state as a bitmask (matches order in buttons[] array)
+    // Bit 0 = A, Bit 1 = B, Bit 2 = X, ... Bit 11 = DRIGHT
+    u16 btnMask = 0;
+    for (int i = 0; i < (int)NUM_BUTTONS; i++) {
+        if (held & buttons[i].key) {
+            btnMask |= (1 << i);
+        }
+    }
 
-// Send stick position
-static void sendStick(int x, int y) {
-    char path[64];
-    snprintf(path, sizeof(path), "/s?x=%d&y=%d", x, y);
+    char path[128];
+    snprintf(path, sizeof(path), "/i?b=%04X&x=%d&y=%d", btnMask, stickX, stickY);
     sendHTTPGet(path);
 }
 
@@ -121,16 +123,11 @@ int main(int argc, char* argv[]) {
 
     u32 prevHeld = 0;
     int prevStickX = 0, prevStickY = 0;
-    bool connected = false;
-    (void)connected;
-    (void)prevHeld;
 
     // Main loop
     while (aptMainLoop()) {
         hidScanInput();
         u32 held = hidKeysHeld();
-        u32 down = hidKeysDown();
-        u32 up = hidKeysUp();
 
         // Exit on START+SELECT
         if ((held & KEY_START) && (held & KEY_SELECT)) break;
@@ -151,23 +148,21 @@ int main(int argc, char* argv[]) {
         if (abs(stickX) < 10) stickX = 0;
         if (abs(stickY) < 10) stickY = 0;
 
-        // Send button presses
+        // Only send if something changed (buttons or stick)
+        // Filter to just the buttons we care about
+        u32 btnHeld = 0;
         for (int i = 0; i < (int)NUM_BUTTONS; i++) {
-            if (down & buttons[i].key) {
-                printf("  [PRESS]   %s\n", buttons[i].name);
-                sendButton(buttons[i].name, 1);
-                connected = true;
-            }
-            if (up & buttons[i].key) {
-                printf("  [RELEASE] %s\n", buttons[i].name);
-                sendButton(buttons[i].name, 0);
-            }
+            if (held & buttons[i].key) btnHeld |= buttons[i].key;
+        }
+        u32 prevBtnHeld = 0;
+        for (int i = 0; i < (int)NUM_BUTTONS; i++) {
+            if (prevHeld & buttons[i].key) prevBtnHeld |= buttons[i].key;
         }
 
-        // Send stick only when changed
-        if (stickX != prevStickX || stickY != prevStickY) {
-            printf("  [STICK] x=%d y=%d\n", stickX, stickY);
-            sendStick(stickX, stickY);
+        if (btnHeld != prevBtnHeld || stickX != prevStickX || stickY != prevStickY) {
+            printf("  [INPUT] btns=0x%03lX stick=%d,%d\n",
+                (unsigned long)btnHeld, stickX, stickY);
+            sendInputState(held, stickX, stickY);
             prevStickX = stickX;
             prevStickY = stickY;
         }

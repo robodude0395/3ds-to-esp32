@@ -17,6 +17,10 @@ void N3DSController::begin() {
   WiFi.softAP(_ssid, _pass);
   _dns.start(53, "*", WiFi.softAPIP());
 
+  // Batched input endpoint (preferred - one request per frame)
+  _server.on("/i", HTTP_GET, [this]() { _handleInput(); });
+
+  // Legacy individual endpoints (still supported)
   _server.on("/b", HTTP_GET, [this]() { _handleButton(); });
   _server.on("/s", HTTP_GET, [this]() { _handleStick(); });
 
@@ -55,6 +59,45 @@ void N3DSController::onInput(N3DSInputCallback callback) {
 
 void N3DSController::setInputTimeout(unsigned long ms) {
   _timeout = ms;
+}
+
+WebServer& N3DSController::getServer() {
+  return _server;
+}
+
+void N3DSController::addEndpoint(const char* uri, HTTPMethod method, WebServer::THandlerFunction handler) {
+  _server.on(uri, method, handler);
+}
+
+// Batched input handler: GET /i?b=XXXX&x=NN&y=NN
+// b = hex bitmask: bit0=A, bit1=B, bit2=X, bit3=Y, bit4=L, bit5=R,
+//                  bit6=Start, bit7=Select, bit8=Up, bit9=Down, bit10=Left, bit11=Right
+void N3DSController::_handleInput() {
+  unsigned int btnMask = 0;
+  if (_server.hasArg("b")) {
+    btnMask = strtoul(_server.arg("b").c_str(), NULL, 16);
+  }
+
+  _input.A      = (btnMask & (1 << 0)) != 0;
+  _input.B      = (btnMask & (1 << 1)) != 0;
+  _input.X      = (btnMask & (1 << 2)) != 0;
+  _input.Y      = (btnMask & (1 << 3)) != 0;
+  _input.L      = (btnMask & (1 << 4)) != 0;
+  _input.R      = (btnMask & (1 << 5)) != 0;
+  _input.Start  = (btnMask & (1 << 6)) != 0;
+  _input.Select = (btnMask & (1 << 7)) != 0;
+  _input.Up     = (btnMask & (1 << 8)) != 0;
+  _input.Down   = (btnMask & (1 << 9)) != 0;
+  _input.Left   = (btnMask & (1 << 10)) != 0;
+  _input.Right  = (btnMask & (1 << 11)) != 0;
+
+  if (_server.hasArg("x")) _input.stickX = constrain(_server.arg("x").toInt(), -100, 100);
+  if (_server.hasArg("y")) _input.stickY = constrain(_server.arg("y").toInt(), -100, 100);
+
+  _lastInput = millis();
+  if (_callback) _callback(_input);
+
+  _server.send(200, "text/plain", "OK");
 }
 
 void N3DSController::_handleButton() {
