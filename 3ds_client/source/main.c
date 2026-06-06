@@ -51,7 +51,7 @@ static void loadConfig(void) {
 }
 
 // ============================================================
-// Button name mapping
+// Button name mapping (order matches bitmask sent to ESP32)
 // ============================================================
 
 typedef struct {
@@ -83,7 +83,7 @@ static int sendHTTPGet(const char* path) {
     struct sockaddr_in server_addr;
     int sock;
     char request[512];
-    char response[128];
+    char response[64];
 
     sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) return -1;
@@ -110,15 +110,19 @@ static int sendHTTPGet(const char* path) {
     return 0;
 }
 
-static void sendButton(const char* id, int pressed) {
-    char path[64];
-    snprintf(path, sizeof(path), "/b?i=%s&s=%d", id, pressed);
-    sendHTTPGet(path);
-}
+// Send entire input state in one batched request:
+// GET /i?b=XXXX&x=NN&y=NN
+// b = hex bitmask of all held buttons (bit order matches buttons[] array)
+static void sendInputState(u32 held, int stickX, int stickY) {
+    u16 btnMask = 0;
+    for (int i = 0; i < (int)NUM_BUTTONS; i++) {
+        if (held & buttons[i].key) {
+            btnMask |= (1 << i);
+        }
+    }
 
-static void sendStick(int x, int y) {
-    char path[64];
-    snprintf(path, sizeof(path), "/s?x=%d&y=%d", x, y);
+    char path[128];
+    snprintf(path, sizeof(path), "/i?b=%04X&x=%d&y=%d", btnMask, stickX, stickY);
     sendHTTPGet(path);
 }
 
@@ -128,28 +132,6 @@ static void sendConfig(void) {
         "/cfg?tp=%d&sp=%d&rt=%d&rs=%d",
         cfg_throttle, cfg_steering, cfg_revThrottle, cfg_revSteering);
     sendHTTPGet(path);
-}
-
-// Sync saved config to ESP32 (called on startup / reconnect)
-static int syncConfigToESP(void) {
-    return sendHTTPGet("/cfg?tp=0") == 0 ? 0 : -1;  // test connection first
-}
-
-static void pushConfigToESP(PrintConsole* topConsole) {
-    consoleSelect(topConsole);
-    printf("Syncing config to ESP32...\n");
-
-    char path[256];
-    snprintf(path, sizeof(path),
-        "/cfg?tp=%d&sp=%d&rt=%d&rs=%d",
-        cfg_throttle, cfg_steering, cfg_revThrottle, cfg_revSteering);
-
-    if (sendHTTPGet(path) == 0) {
-        printf("  Config synced: T=%d%% S=%d%% rT=%d rS=%d\n",
-            cfg_throttle, cfg_steering, cfg_revThrottle, cfg_revSteering);
-    } else {
-        printf("  Sync failed (will retry)\n");
-    }
 }
 
 // ============================================================
@@ -324,19 +306,14 @@ int main(int argc, char* argv[]) {
     drawGUI();
     consoleSelect(&topConsole);
 
-    int prevStickX = 0, prevStickY = 0;
     u32 prevHeld = 0;
-    (void)prevHeld;
+    int prevStickX = 0, prevStickY = 0;
     bool touchHeld = false;
-    bool configSentThisSession = false;
-    (void)configSentThisSession;
 
     // Main loop
     while (aptMainLoop()) {
         hidScanInput();
         u32 held = hidKeysHeld();
-        u32 down = hidKeysDown();
-        u32 up = hidKeysUp();
 
         // Exit on START+SELECT
         if ((held & KEY_START) && (held & KEY_SELECT)) break;
@@ -394,23 +371,21 @@ int main(int argc, char* argv[]) {
         if (abs(stickX) < 10) stickX = 0;
         if (abs(stickY) < 10) stickY = 0;
 
-        // --- Send button events ---
-        consoleSelect(&topConsole);
+        // --- Send batched input only when something changed ---
+        u32 btnHeld = 0;
         for (int i = 0; i < (int)NUM_BUTTONS; i++) {
-            if (down & buttons[i].key) {
-                printf("  [PRESS]   %s\n", buttons[i].name);
-                sendButton(buttons[i].name, 1);
-            }
-            if (up & buttons[i].key) {
-                printf("  [RELEASE] %s\n", buttons[i].name);
-                sendButton(buttons[i].name, 0);
-            }
+            if (held & buttons[i].key) btnHeld |= buttons[i].key;
+        }
+        u32 prevBtnHeld = 0;
+        for (int i = 0; i < (int)NUM_BUTTONS; i++) {
+            if (prevHeld & buttons[i].key) prevBtnHeld |= buttons[i].key;
         }
 
-        // Send stick only when changed
-        if (stickX != prevStickX || stickY != prevStickY) {
-            printf("  [STICK] x=%d y=%d\n", stickX, stickY);
-            sendStick(stickX, stickY);
+        if (btnHeld != prevBtnHeld || stickX != prevStickX || stickY != prevStickY) {
+            consoleSelect(&topConsole);
+            printf("  [INPUT] btns=0x%03lX stick=%d,%d\n",
+                (unsigned long)btnHeld, stickX, stickY);
+            sendInputState(held, stickX, stickY);
             prevStickX = stickX;
             prevStickY = stickY;
         }

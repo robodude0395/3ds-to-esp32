@@ -92,6 +92,12 @@ public:
   // Auto-clear inputs after timeout (0 = disabled)
   void setInputTimeout(unsigned long ms);
 
+  // Access the internal WebServer to add custom endpoints
+  WebServer& getServer();
+
+  // Convenience: add a custom endpoint (call after begin())
+  void addEndpoint(const char* uri, HTTPMethod method, WebServer::THandlerFunction handler);
+
 private:
   const char* _ssid = "3DS_Controller";
   const char* _pass = "12345678";
@@ -104,6 +110,7 @@ private:
 
   void _handleButton();
   void _handleStick();
+  void _handleInput();
   void _handleConnTest();
   bool _isNintendoCheck();
 };
