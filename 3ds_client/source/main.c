@@ -14,10 +14,46 @@
 #define SERVER_IP   "192.168.4.1"
 #define SERVER_PORT 80
 
-// How often to send updates (ms)
-#define SEND_INTERVAL 50
+// Save file path on SD card
+#define SAVE_FILE "/3ds/rckart.cfg"
 
+// ============================================================
+// Settings (saved to SD, synced to ESP32)
+// ============================================================
+
+static int cfg_throttle = 75;
+static int cfg_steering = 100;
+static int cfg_revThrottle = 1;
+static int cfg_revSteering = 1;
+
+// ============================================================
+// Save / Load
+// ============================================================
+
+static void saveConfig(void) {
+    FILE* f = fopen(SAVE_FILE, "w");
+    if (!f) return;
+    fprintf(f, "%d %d %d %d\n", cfg_throttle, cfg_steering, cfg_revThrottle, cfg_revSteering);
+    fclose(f);
+}
+
+static void loadConfig(void) {
+    FILE* f = fopen(SAVE_FILE, "r");
+    if (!f) return;
+    int tp, sp, rt, rs;
+    if (fscanf(f, "%d %d %d %d", &tp, &sp, &rt, &rs) == 4) {
+        cfg_throttle = tp;
+        cfg_steering = sp;
+        cfg_revThrottle = rt;
+        cfg_revSteering = rs;
+    }
+    fclose(f);
+}
+
+// ============================================================
 // Button name mapping
+// ============================================================
+
 typedef struct {
     u32 key;
     const char* name;
@@ -39,11 +75,14 @@ static const ButtonMap buttons[] = {
 };
 #define NUM_BUTTONS (sizeof(buttons) / sizeof(buttons[0]))
 
-// Send a quick HTTP GET request (fire and forget)
+// ============================================================
+// Networking
+// ============================================================
+
 static int sendHTTPGet(const char* path) {
     struct sockaddr_in server_addr;
     int sock;
-    char request[256];
+    char request[512];
     char response[128];
 
     sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -66,43 +105,181 @@ static int sendHTTPGet(const char* path) {
         path, SERVER_IP);
 
     send(sock, request, strlen(request), 0);
-
-    // Read just enough to complete the request
     recv(sock, response, sizeof(response) - 1, 0);
-
     close(sock);
     return 0;
 }
 
-// Send button state
 static void sendButton(const char* id, int pressed) {
     char path[64];
     snprintf(path, sizeof(path), "/b?i=%s&s=%d", id, pressed);
     sendHTTPGet(path);
 }
 
-// Send stick position
 static void sendStick(int x, int y) {
     char path[64];
     snprintf(path, sizeof(path), "/s?x=%d&y=%d", x, y);
     sendHTTPGet(path);
 }
 
+static void sendConfig(void) {
+    char path[256];
+    snprintf(path, sizeof(path),
+        "/cfg?tp=%d&sp=%d&rt=%d&rs=%d",
+        cfg_throttle, cfg_steering, cfg_revThrottle, cfg_revSteering);
+    sendHTTPGet(path);
+}
+
+// Sync saved config to ESP32 (called on startup / reconnect)
+static int syncConfigToESP(void) {
+    return sendHTTPGet("/cfg?tp=0") == 0 ? 0 : -1;  // test connection first
+}
+
+static void pushConfigToESP(PrintConsole* topConsole) {
+    consoleSelect(topConsole);
+    printf("Syncing config to ESP32...\n");
+
+    char path[256];
+    snprintf(path, sizeof(path),
+        "/cfg?tp=%d&sp=%d&rt=%d&rs=%d",
+        cfg_throttle, cfg_steering, cfg_revThrottle, cfg_revSteering);
+
+    if (sendHTTPGet(path) == 0) {
+        printf("  Config synced: T=%d%% S=%d%% rT=%d rS=%d\n",
+            cfg_throttle, cfg_steering, cfg_revThrottle, cfg_revSteering);
+    } else {
+        printf("  Sync failed (will retry)\n");
+    }
+}
+
+// ============================================================
+// GUI Drawing (bottom screen console-based)
+// ============================================================
+
+static PrintConsole bottomConsole;
+
+static void drawGUI(void) {
+    consoleSelect(&bottomConsole);
+    consoleClear();
+
+    // Title
+    printf("\x1b[1;1H\x1b[33m=== RC KART SETTINGS ===\x1b[0m");
+
+    // Throttle slider
+    printf("\x1b[3;1HThrottle Power: %3d%%", cfg_throttle);
+    printf("\x1b[4;1H[");
+    int tFill = cfg_throttle * 24 / 100;
+    for (int i = 0; i < 24; i++) {
+        printf("%c", i < tFill ? '#' : '-');
+    }
+    printf("]");
+
+    // Steering slider
+    printf("\x1b[6;1HSteering Power: %3d%%", cfg_steering);
+    printf("\x1b[7;1H[");
+    int sFill = cfg_steering * 24 / 100;
+    for (int i = 0; i < 24; i++) {
+        printf("%c", i < sFill ? '#' : '-');
+    }
+    printf("]");
+
+    // Toggle buttons
+    printf("\x1b[9;1HRev Throttle: %s",
+        cfg_revThrottle ? "\x1b[32m[ON] \x1b[0m" : "\x1b[31m[OFF]\x1b[0m");
+    printf("\x1b[9;22HRev Steering: %s",
+        cfg_revSteering ? "\x1b[32m[ON] \x1b[0m" : "\x1b[31m[OFF]\x1b[0m");
+
+    // Drift info
+    printf("\x1b[11;1H\x1b[36mDrift: Hold L + A to drift\x1b[0m");
+    printf("\x1b[12;1H       Release L for BOOST");
+
+    // Instructions
+    printf("\x1b[14;1H\x1b[37mTouch sliders to adjust");
+    printf("\x1b[15;1HTouch toggles to flip");
+    printf("\x1b[16;1HSettings auto-saved to SD\x1b[0m");
+
+    // Controls reminder
+    printf("\x1b[18;1H\x1b[33mControls:\x1b[0m A=Fwd B=Rev");
+    printf("\x1b[19;1HStick/DPad=Steer  L+A=Drift");
+    printf("\x1b[20;1HSTART+SELECT to exit");
+}
+
+// ============================================================
+// Touch handling
+// ============================================================
+
+static void handleTouch(touchPosition touch) {
+    int tx = touch.px;
+    int ty = touch.py;
+    bool changed = false;
+
+    // Throttle slider area: row 4 (y~24-40), x 8-208
+    if (ty >= 24 && ty <= 40 && tx >= 8 && tx <= 208) {
+        cfg_throttle = (tx - 8) * 100 / 200;
+        if (cfg_throttle < 0) cfg_throttle = 0;
+        if (cfg_throttle > 100) cfg_throttle = 100;
+        changed = true;
+    }
+
+    // Steering slider area: row 7 (y~48-64), x 8-208
+    if (ty >= 48 && ty <= 64 && tx >= 8 && tx <= 208) {
+        cfg_steering = (tx - 8) * 100 / 200;
+        if (cfg_steering < 0) cfg_steering = 0;
+        if (cfg_steering > 100) cfg_steering = 100;
+        changed = true;
+    }
+
+    // Rev Throttle toggle: row 9 (y~64-80), x 8-160
+    if (ty >= 64 && ty <= 80 && tx >= 8 && tx <= 160) {
+        cfg_revThrottle = !cfg_revThrottle;
+        changed = true;
+    }
+
+    // Rev Steering toggle: row 9 (y~64-80), x 168-320
+    if (ty >= 64 && ty <= 80 && tx >= 168 && tx <= 320) {
+        cfg_revSteering = !cfg_revSteering;
+        changed = true;
+    }
+
+    if (changed) {
+        sendConfig();
+        saveConfig();
+        drawGUI();
+    }
+}
+
+// ============================================================
+// Main
+// ============================================================
+
 int main(int argc, char* argv[]) {
     (void)argc;
     (void)argv;
 
     gfxInitDefault();
-    consoleInit(GFX_TOP, NULL);
 
-    printf("=== 3DS Controller Client ===\n\n");
-    printf("Server: %s:%d\n\n", SERVER_IP, SERVER_PORT);
+    // Top screen: status/log console
+    PrintConsole topConsole;
+    consoleInit(GFX_TOP, &topConsole);
+
+    // Bottom screen: settings GUI
+    consoleInit(GFX_BOTTOM, &bottomConsole);
+
+    consoleSelect(&topConsole);
+    printf("=== RC Kart Controller ===\n\n");
+    printf("Server: %s:%d\n", SERVER_IP, SERVER_PORT);
     printf("Connect to '3DS_Controller' WiFi\n");
     printf("Password: 12345678\n\n");
-    printf("Press START+SELECT to exit\n\n");
+
+    // Load saved preferences from SD
+    loadConfig();
+    printf("Loaded config: T=%d%% S=%d%% rT=%d rS=%d\n",
+        cfg_throttle, cfg_steering, cfg_revThrottle, cfg_revSteering);
+
+    printf("Press START+SELECT to exit\n");
     printf("---\n\n");
 
-    // Initialize SOC service for networking
+    // Initialize networking
     u32 *SOC_buffer = (u32*)memalign(0x1000, 0x100000);
     if (SOC_buffer == NULL) {
         printf("Failed to allocate SOC buffer!\n");
@@ -117,13 +294,42 @@ int main(int argc, char* argv[]) {
     }
 
     printf("Network initialized!\n");
-    printf("Sending inputs to ESP32...\n\n");
 
-    u32 prevHeld = 0;
+    // Push saved config to ESP32 on startup
+    // Retry a few times since WiFi might not be ready yet
+    {
+        int synced = 0;
+        for (int attempt = 0; attempt < 5; attempt++) {
+            printf("Connecting to ESP32 (attempt %d)...\n", attempt + 1);
+            char path[256];
+            snprintf(path, sizeof(path),
+                "/cfg?tp=%d&sp=%d&rt=%d&rs=%d",
+                cfg_throttle, cfg_steering, cfg_revThrottle, cfg_revSteering);
+            if (sendHTTPGet(path) == 0) {
+                printf("Config synced to ESP32!\n");
+                synced = 1;
+                break;
+            }
+            // Wait a bit before retrying
+            svcSleepThread(1000000000LL);  // 1 second
+        }
+        if (!synced) {
+            printf("Could not sync yet. Will send on first input.\n");
+        }
+    }
+
+    printf("\nSending inputs to ESP32...\n\n");
+
+    // Draw initial GUI
+    drawGUI();
+    consoleSelect(&topConsole);
+
     int prevStickX = 0, prevStickY = 0;
-    bool connected = false;
-    (void)connected;
+    u32 prevHeld = 0;
     (void)prevHeld;
+    bool touchHeld = false;
+    bool configSentThisSession = false;
+    (void)configSentThisSession;
 
     // Main loop
     while (aptMainLoop()) {
@@ -135,11 +341,48 @@ int main(int argc, char* argv[]) {
         // Exit on START+SELECT
         if ((held & KEY_START) && (held & KEY_SELECT)) break;
 
-        // Circle pad
+        // --- Touch screen handling ---
+        if (held & KEY_TOUCH) {
+            touchPosition touch;
+            hidTouchRead(&touch);
+            if (!touchHeld) {
+                handleTouch(touch);
+                touchHeld = true;
+            } else {
+                // Dragging on sliders
+                int tx = touch.px;
+                int ty = touch.py;
+                bool sliderDrag = false;
+
+                if (ty >= 24 && ty <= 40 && tx >= 8 && tx <= 208) {
+                    cfg_throttle = (tx - 8) * 100 / 200;
+                    if (cfg_throttle < 0) cfg_throttle = 0;
+                    if (cfg_throttle > 100) cfg_throttle = 100;
+                    sliderDrag = true;
+                }
+                if (ty >= 48 && ty <= 64 && tx >= 8 && tx <= 208) {
+                    cfg_steering = (tx - 8) * 100 / 200;
+                    if (cfg_steering < 0) cfg_steering = 0;
+                    if (cfg_steering > 100) cfg_steering = 100;
+                    sliderDrag = true;
+                }
+                if (sliderDrag) {
+                    drawGUI();
+                }
+            }
+        } else {
+            if (touchHeld) {
+                // Touch released - send final config and save
+                sendConfig();
+                saveConfig();
+                touchHeld = false;
+            }
+        }
+
+        // --- Circle pad ---
         circlePosition pos;
         hidCircleRead(&pos);
 
-        // Normalize circle pad to -100..100
         int stickX = (pos.dx * 100) / 156;
         int stickY = (pos.dy * 100) / 156;
         if (stickX > 100) stickX = 100;
@@ -151,12 +394,12 @@ int main(int argc, char* argv[]) {
         if (abs(stickX) < 10) stickX = 0;
         if (abs(stickY) < 10) stickY = 0;
 
-        // Send button presses
+        // --- Send button events ---
+        consoleSelect(&topConsole);
         for (int i = 0; i < (int)NUM_BUTTONS; i++) {
             if (down & buttons[i].key) {
                 printf("  [PRESS]   %s\n", buttons[i].name);
                 sendButton(buttons[i].name, 1);
-                connected = true;
             }
             if (up & buttons[i].key) {
                 printf("  [RELEASE] %s\n", buttons[i].name);
@@ -174,17 +417,20 @@ int main(int argc, char* argv[]) {
 
         prevHeld = held;
 
-        // Render
         gfxFlushBuffers();
         gfxSwapBuffers();
         gspWaitForVBlank();
     }
+
+    // Save config one final time on exit
+    saveConfig();
 
     printf("\nShutting down...\n");
     socExit();
     free(SOC_buffer);
 
 exit_fail:
+    consoleSelect(&topConsole);
     printf("\nPress A to exit.\n");
     while (aptMainLoop()) {
         hidScanInput();
